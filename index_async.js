@@ -1,9 +1,30 @@
 #!/usr/bin/env node
 
 const fetch = require("node-fetch");
-const request = require("request");
 const fs = require('fs');
 var sleep = require('thread-sleep');
+
+const neo4j = require('neo4j-driver').v1;
+
+const driver = neo4j.driver('bolt://localhost:7687', neo4j.auth.basic('neo4j', 'neo4j'));
+const session = driver.session();
+
+const personName = 'Alice';
+// const resultPromise = session.run(
+//     'CREATE (a:Person {name: "italo"}) RETURN a'
+// );
+
+// resultPromise.then(result => {
+//     session.close();
+
+//     const singleRecord = result.records[0];
+//     const node = singleRecord.get(0);
+
+//     console.log(node.properties.name);
+
+//     // on application exit:
+//     driver.close();
+// });
 
 let count = 1;
 var options = {
@@ -28,14 +49,13 @@ function save(json, fileName) {
         fs.writeFile(fileName, JSON.stringify(obj), 'utf8');
     });
 }
+const isAValidAsset = assetUrl => assetUrl.indexOf("www.nytimes.com") >= 0;
 let users = [];
 let assets = [];
 let keywords = [];
 const addAsset = (asset) => {
     if (assets.filter(a => a.assetID == asset.assetID).length === 0) {
-        if (asset.url.indexOf("www.nytimes.com") >= 0) {
-            assets.push(asset);
-        }
+        assets.push(asset);
     }
 }
 
@@ -57,50 +77,59 @@ async function getUsers(x) {
                 comments: [],
             });
         }
-        addAsset({
-            assetID: item.assetID,
-            url: item.assetURL,
-            snippet: '',
-            headline: '',
-            keywords: []
-        });
+        // addAsset({
+        //     assetID: item.assetID,
+        //     url: item.assetURL,
+        //     snippet: '',
+        //     headline: '',
+        //     keywords: []
+        // });
     });
 }
 
+function saveData() {
+    fs.writeFile('users.json', JSON.stringify(users, null, 2), 'utf8');
+    fs.writeFile('assets.json', JSON.stringify(assets, null, 2), 'utf8');
+}
 async function getUserComments(userID) {
-    for (let x = 0; x < 1; x++) {
-        let json = await (await fetch(`http://api.nytimes.com/svc/community/v3/user-content/user.json?userID=${userID}&offset=${x * 25}`, options)).json();
-        json.results.comments.forEach(item => {
-            const createDate = new Date(item.createDate * 1000);
-            const createDateString = `${createDate.getDay() + 1}/${createDate.getMonth() + 1}/${createDate.getFullYear()}`;
-            const userIndex = users.findIndex(u => u.userID === item.userID);
-            let user = users[userIndex];
-            const commentIndex = user.comments.findIndex(c => c.assetID === item.asset.assetID);
-            if (commentIndex >= 0) {
-                user.comments[commentIndex].times = user.comments[commentIndex].times + 1;
-            }
-            else {
-                user.comments.push({ assetID: item.asset.assetID, times: 1 });
-                addAsset({
-                    assetID: item.asset.assetID,
-                    url: item.asset.assetURL,
-                    snippet: '',
-                    headline: '',
-                    keywords: []
-                });
-            }
-            users[userIndex] = user;
-        });
+    for (let x = 0; x < 5; x++) {
+        try {
+
+            console.log(`http://api.nytimes.com/svc/community/v3/user-content/user.json?userID=${userID}&offset=${x * 25}`)
+            let json = await (await fetch(`http://api.nytimes.com/svc/community/v3/user-content/user.json?userID=${userID}&offset=${x * 25}`, options)).json();
+            json.results.comments.forEach(item => {
+                if (item.createDate < 1451617200 && item.asset.assetURL != undefined && isAValidAsset(item.asset.assetURL)) {
+                    // const createDate = new Date(item.createDate * 1000);
+                    // const createDateString = `${createDate.getDay() + 1}/${createDate.getMonth() + 1}/${createDate.getFullYear()}`;
+                    const userIndex = users.findIndex(u => u.userID === item.userID);
+                    let user = users[userIndex];
+                    const commentIndex = user.comments.findIndex(c => c.assetID === item.asset.assetID);
+
+                    if (commentIndex >= 0) {
+                        user.comments[commentIndex].times = user.comments[commentIndex].times + 1;
+                    } else {
+                        user.comments.push({
+                            assetID: item.asset.assetID,
+                            times: 1
+                        });
+                        addAsset({
+                            assetID: item.asset.assetID,
+                            url: item.asset.assetURL,
+                            snippet: '',
+                            headline: '',
+                            keywords: []
+                        });
+                    }
+                    users[userIndex] = user;
+                }
+            });
+        } catch (e) {
+            console.log(e);
+        }
+        sleep(100);
     }
 }
-const isHttps = url => url.substring(4, 5) === "s";
-async function urlExists(url) {
-    options = { method: 'HEAD', url: url },
-        req = http.request(options, function (r) {
-            console.log(JSON.stringify(r.headers));
-        });
-    req.end();
-}
+
 async function getAssetsDetail() {
     for (var a in assets) {
         let asset = assets[a];
@@ -128,17 +157,25 @@ function removeFile(fileName) {
 }
 //1451617200 01-01-2016 limite
 async function init(test) {
-    if (!test) {
-        for (var index = 1; index < 4; index++) {
-            console.log('buscando usuarios')
-            await getUsers(index);
+    try {
+        if (!test) {
+            for (var index = 1; index < 13; index++) {
+                console.log('buscando usuarios')
+                await getUsers(index);
+            }
         }
+        console.log(users.length)
+        for (let uIndex in users) {
+            let user = users[uIndex];
+            await getUserComments(user.userID);
+        }
+        await getAssetsDetail();
+        saveData();
+        console.log('fim')
+    } catch (e) {
+        console.error('erro: ' + e);
+        saveData();
     }
-    // await getUserComments(users[0].userID);
-    await getAssetsDetail();
-    fs.writeFile('users.json', JSON.stringify(users, null, 2), 'utf8');
-    fs.writeFile('assets.json', JSON.stringify(assets, null, 2), 'utf8');
-    console.log('fim')
 }
 
 if (process.argv[2] != undefined && process.argv[2] === `test`) {
